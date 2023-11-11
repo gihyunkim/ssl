@@ -51,6 +51,8 @@ parser.add_argument('--temperature', default=0.07, type=float,
 parser.add_argument('--n-views', default=2, type=int, metavar='N',
                     help='Number of views for contrastive learning training.')
 parser.add_argument('--gpu-index', default=0, type=int, help='Gpu index.')
+parser.add_argument('--use_pos', action='store_true',
+                    help='Whether or not to use positive model')
 
 
 def main():
@@ -74,17 +76,21 @@ def main():
         num_workers=args.workers, pin_memory=True, drop_last=True)
 
     '''backbone'''
-    model = ResNetSimCLR(base_model=args.arch, out_dim=args.out_dim)
-    neg_model = NegModel()
+    if args.use_pos: pos_model = ResNetSimCLR(base_model=args.arch, out_dim=args.out_dim)
+    neg_model = ResNetSimCLR(base_model=args.arch, out_dim=args.out_dim)
+    # neg_model = NegModel()
+    models = [pos_model, neg_model] if args.use_pos else [neg_model]
     
-    optimizer = torch.optim.Adam([model.parameters(), neg_model.parameters()], args.lr, weight_decay=args.weight_decay)
+    model_parameters = list(neg_model.parameters())
+    if args.use_pos: model_parameters + list(pos_model.parameters())
+    optimizer = torch.optim.Adam(model_parameters, args.lr, weight_decay=args.weight_decay)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_loader), eta_min=0,
                                                            last_epoch=-1)
 
     #  It’s a no-op if the 'gpu_index' argument is a negative integer or None.
     with torch.cuda.device(args.gpu_index):
-        simclr = RevisedSimCLR(model=[model, neg_model], optimizer=optimizer, scheduler=scheduler, args=args)
+        simclr = RevisedSimCLR(model=models, optimizer=optimizer, scheduler=scheduler, args=args)
         simclr.train(train_loader)
 
 

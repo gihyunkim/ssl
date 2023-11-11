@@ -114,18 +114,19 @@ class SimCLR(object):
 class RevisedSimCLR(object):
     def __init__(self, *args, **kwargs):
         self.args = kwargs['args']
-        self.pos_model = kwargs['model'][0].to(self.args.device)
+        self.pos_model = kwargs['model'][0].to(self.args.device) if self.args.use_pos else None
         self.neg_model = kwargs['model'][1].to(self.args.device)
         
         self.optimizer = kwargs['optimizer']
         self.scheduler = kwargs['scheduler']
         self.writer = SummaryWriter()
         logging.basicConfig(filename=os.path.join(self.writer.log_dir, 'training.log'), level=logging.DEBUG)
+
         self.criterion1 = torch.nn.CrossEntropyLoss().to(self.args.device)
         self.criterion2 = torch.nn.MSELoss().to(self.args.device)
 
     def pos_loss(self, features):
-        labels = torch.cat([torch.arange(self.args.batch_size) for i in range(self.args.n_views)], dim=0)
+        labels = torch.cat([torch.arange(self.args.batch_size) for _ in range(self.args.n_views)], dim=0)
    
         labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
     
@@ -148,7 +149,7 @@ class RevisedSimCLR(object):
         return logits, labels
 
     def neg_loss(self, features):
-        labels = torch.cat([torch.arange(self.args.batch_size) for i in range(self.args.n_views)], dim=0)
+        labels = torch.cat([torch.arange(self.args.batch_size) for _ in range(self.args.n_views)], dim=0)
    
         labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
     
@@ -198,16 +199,17 @@ class RevisedSimCLR(object):
 
                 with autocast(enabled=self.args.fp16_precision):
                     '''positive model'''
-                    features = self.pos_model(images)
-                    logits, labels = self.pos_loss(features)
-                    loss1 = self.criterion2(logits, labels)
+                    if self.args.use_pos:
+                        features = self.pos_model(images)
+                        logits, labels = self.pos_loss(features)
+                        pos_loss = self.criterion2(logits, labels)
                     
                     '''negative model'''
-                    neg_features = self.neg_model(features)
+                    neg_features = self.neg_model(images)
                     neg_logits, neg_labels = self.neg_loss(neg_features)
-                    loss2 = self.criterion1(neg_logits, neg_labels)
+                    neg_loss = self.criterion1(neg_logits, neg_labels)
 
-                loss = loss1 + loss2
+                loss = neg_loss + pos_loss if self.args.use_pos else neg_loss
                 self.optimizer.zero_grad()
 
                 scaler.scale(loss).backward()
@@ -232,11 +234,14 @@ class RevisedSimCLR(object):
         logging.info("Training has finished.")
         # save model checkpoints
         checkpoint_name = 'checkpoint_{:04d}.pth.tar'.format(self.args.epochs)
-        save_checkpoint({
-            'epoch': self.args.epochs,
-            'arch': self.args.arch,
-            'state_dict': self.model.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-        }, is_best=False, filename=os.path.join(self.writer.log_dir, checkpoint_name))
+
+        '''save checkpoint'''
+        # save_checkpoint({
+        #     'epoch': self.args.epochs,
+        #     'arch': self.args.arch,
+        #     'state_dict': self.model.state_dict(),
+        #     'optimizer': self.optimizer.state_dict(),
+        # }, is_best=False, filename=os.path.join(self.writer.log_dir, checkpoint_name))
+
         logging.info(f"Model checkpoint and metadata has been saved at {self.writer.log_dir}.")
 
